@@ -20,6 +20,9 @@ def load_data_and_prepare_model():
     Himachal_Pradesh = pd.read_excel('HP_data.xlsx', engine='openpyxl')
     Uttarakhand = pd.read_excel('Uttarakhand_data.xlsx', engine='openpyxl')
     
+
+
+    
     # Select features and target
     X = df[["N", "P", "K", "rainfall", "humidity", "temperature"]]
     y = df["label"]
@@ -28,26 +31,26 @@ def load_data_and_prepare_model():
     label_encoder = LabelEncoder()
     y_encoded = label_encoder.fit_transform(y)
 
-    # Apply feature scaling
+    # Apply feature scaling to balance all parameters
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # Apply polynomial transformation
+    # Apply polynomial transformation for non-linearity
     poly = PolynomialFeatures(degree=2, include_bias=False)
     X_poly = poly.fit_transform(X_scaled)
 
-    # Feature Selection
+    # Feature Selection: Pick best 10 features based on correlation with output
     selector = SelectKBest(score_func=f_classif, k=10)
     X_selected = selector.fit_transform(X_poly, y_encoded)
 
-    # Handle class imbalance using SMOTE
+    # Handle class imbalance using SMOTE (Synthetic Minority Oversampling)
     smote = SMOTE(random_state=42)
     X_balanced, y_balanced = smote.fit_resample(X_selected, y_encoded)
 
     # Train-test split
     X_train, X_test, y_train, y_test = train_test_split(X_balanced, y_balanced, test_size=0.2, random_state=42)
 
-    # Train the Random Forest model
+    # Train the Random Forest model with optimized hyperparameters
     rf_model = RandomForestClassifier(
         n_estimators=200,
         max_depth=20,
@@ -58,12 +61,12 @@ def load_data_and_prepare_model():
     )
     rf_model.fit(X_train, y_train)
     
-    # Get crop parameter stats
+    # Calculate crop parameter statistics
     crop_parameter_stats = get_crop_parameter_stats(df)
     
-    return df, Kerala, Himachal_Pradesh, Uttarakhand, rf_model, label_encoder, scaler, poly, selector, crop_parameter_stats
+    return rf_model, label_encoder, scaler, poly, selector, df, crop_parameter_stats, Kerala, Himachal_Pradesh, Uttarakhand
 
-# Function to get optimal parameter stats for crops
+# Function to get optimal parameter ranges and means for each crop
 def get_crop_parameter_stats(df):
     crop_params = {}
     for crop in df["label"].unique():
@@ -108,31 +111,38 @@ def get_crop_parameter_stats(df):
         }
     return crop_params
 
-# Parameter match score functions
+# Function to check if a parameter is within the optimal range or close to it
 def get_parameter_match_score(param_name, param_value, crop, crop_params, proximity_threshold=0.15):
     param_stats = crop_params[crop][param_name]
     min_val, max_val = param_stats["min"], param_stats["max"]
     mean_val, std_val = param_stats["mean"], param_stats["std"]
     
+    # If the value is within range, it's a perfect match
     if min_val <= param_value <= max_val:
         return 1.0
     
+    # Calculate how close the value is to the range
     if param_value < min_val:
+        # Calculate proximity as percentage of the range or std deviation
         range_size = max(max_val - min_val, std_val * 2)
-        if range_size == 0:
+        if range_size == 0:  # Avoid division by zero
             range_size = 1
         distance = (min_val - param_value) / range_size
-    else:
+    else:  # param_value > max_val
         range_size = max(max_val - min_val, std_val * 2)
-        if range_size == 0:
+        if range_size == 0:  # Avoid division by zero
             range_size = 1
         distance = (param_value - max_val) / range_size
     
+    # If the distance is within the proximity threshold, it's a partial match
     if distance <= proximity_threshold:
+        # Convert distance to a score between 0 and 1
         return max(0, 1 - (distance / proximity_threshold))
     
+    # Otherwise, it's not a match
     return 0.0
 
+# Function to calculate parameter matching scores for each crop
 def calculate_parameter_match_scores(input_values, crop_params, proximity_threshold=0.15):
     match_scores = {}
     
@@ -150,6 +160,7 @@ def calculate_parameter_match_scores(input_values, crop_params, proximity_thresh
             )
             param_scores.append(score)
         
+        # Calculate overall match score (average of parameter scores)
         match_scores[crop] = {
             "total_score": sum(param_scores),
             "avg_score": sum(param_scores) / len(param_scores),
@@ -158,34 +169,39 @@ def calculate_parameter_match_scores(input_values, crop_params, proximity_thresh
     
     return match_scores
 
+# Function to get crops with best parameter matches
 def get_best_matching_crops(match_scores, top_n=3, min_score_threshold=3.0):
+    # Filter crops by minimum total score
     filtered_crops = [(crop, scores) for crop, scores in match_scores.items() 
                      if scores["total_score"] >= min_score_threshold]
     
+    # Sort by total score, descending
     sorted_crops = sorted(filtered_crops, key=lambda x: x[1]["total_score"], reverse=True)
     
+    # Return top N crops
     return sorted_crops[:top_n]
 
-# Function to get expected values based on region, district and season
-def get_expected_values(state, season, dataset, datasets):
+# Function to fetch expected values for a given state and season
+def get_expected_values(state, season, dataset, Kerala, Himachal_Pradesh, Uttarakhand):
+    # Choose the correct dataset based on user input
     if dataset == "Kerala":
-        selected_dataset = datasets[1]
+        selected_dataset = Kerala
     elif dataset == "Himachal Pradesh":
-        selected_dataset = datasets[2]
+        selected_dataset = Himachal_Pradesh
     elif dataset == "Uttarakhand":
-        selected_dataset = datasets[3]
+        selected_dataset = Uttarakhand
     else:
-        st.error(f"Dataset '{dataset}' is not valid.")
+        st.error(f"Dataset '{dataset}' is not valid. Choose from Kerala, Himachal Pradesh, or Uttarakhand.")
         return None
     
     state_data = selected_dataset[selected_dataset["state"].str.lower() == state.lower()]
     if state_data.empty:
-        st.error(f"District '{state}' not found in the dataset.")
+        st.error(f"State '{state}' not found in the dataset.")
         return None
 
     season_map = {"zaid": "zaid", "rabi": "rabi", "kharif": "kharif"}
     if season.lower() not in season_map:
-        st.error(f"Season '{season}' is not valid.")
+        st.error(f"Season '{season}' is not valid. Choose from zaid, rabi, or kharif.")
         return None
 
     season_suffix = season_map[season.lower()]
@@ -199,70 +215,74 @@ def get_expected_values(state, season, dataset, datasets):
 
     return expected_n, expected_p, expected_k, expected_temperature, expected_humidity, expected_rainfall
 
-# Load data and prepare model
+# Load the model and data
 try:
-    datasets = load_data_and_prepare_model()
-    df, Kerala, Himachal_Pradesh, Uttarakhand, rf_model, label_encoder, scaler, poly, selector, crop_parameter_stats = datasets
+    rf_model, label_encoder, scaler, poly, selector, df, crop_parameter_stats, Kerala, Himachal_Pradesh, Uttarakhand = load_model_and_data()
 except Exception as e:
-    st.error(f"Error loading data: {e}")
+    st.error(f"Error loading model and data: {e}")
     st.stop()
 
-# Input area
-st.subheader("Enter your details")
+# Create Streamlit interface
+st.subheader("Input Parameters")
 
-# First row - Region and District
-col1, col2, col3 = st.columns(3)
+# UI for dataset selection
+col1, col2 = st.columns(2)
 with col1:
     dataset_choice = st.selectbox(
-        "Region",
+        "Select dataset", 
         ["Kerala", "Himachal Pradesh", "Uttarakhand"]
     )
-
-    # Get districts based on region selection
-    if dataset_choice == "Kerala":
-        districts = Kerala["state"].unique().tolist()
-    elif dataset_choice == "Himachal Pradesh":
-        districts = Himachal_Pradesh["state"].unique().tolist()
-    else:  # Uttarakhand
-        districts = Uttarakhand["state"].unique().tolist()
-
-with col2:
-    district = st.selectbox("District", districts)
-
-with col3:
-    season = st.selectbox("Season", ["kharif", "rabi", "zaid"])
+    
+    state = st.text_input("Enter state name").strip()
+    season = st.selectbox("Select season", ["zaid", "rabi", "kharif"])
 
 # Get expected values
-expected_values = get_expected_values(district, season, dataset_choice, datasets)
+expected_values = None
+if state and season:
+    try:
+        expected_values = get_expected_values(state, season, dataset_choice, Kerala, Himachal_Pradesh, Uttarakhand)
+    except Exception as e:
+        st.error(f"Error retrieving expected values: {e}")
 
-if expected_values:
-    expected_n, expected_p, expected_k, expected_temperature, expected_humidity, expected_rainfall = expected_values
-    
-    # Input parameters with higher limits
-    st.subheader("Soil and Environmental Parameters")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        N = st.number_input("Nitrogen (N)", min_value=0.0, value=float(expected_n), step=1.0)
-        P = st.number_input("Phosphorus (P)", min_value=0.0, value=float(expected_p), step=1.0)
-    with col2:
-        K = st.number_input("Potassium (K)", min_value=0.0, value=float(expected_k), step=1.0)
-        rainfall = st.number_input("Rainfall (mm)", min_value=0.0, value=float(expected_rainfall), step=1.0)
-    with col3:
-        humidity = st.number_input("Humidity (%)", min_value=0.0, max_value=100.0, value=float(expected_humidity), step=0.1)
-        temperature = st.number_input("Temperature (°C)", min_value=0.0, max_value=50.0, value=float(expected_temperature), step=0.1)
-    
-    # Prediction button
-    if st.button("Get Recommendation", type="primary"):
-        # Store input values for predictions
+# Input fields with default values from expected values
+with col2:
+    if expected_values:
+        expected_n, expected_p, expected_k, expected_temperature, expected_humidity, expected_rainfall = expected_values
+        
+        N = st.number_input(f"N (Nitrogen) [Expected: {expected_n}]", value=float(expected_n))
+        P = st.number_input(f"P (Phosphorus) [Expected: {expected_p}]", value=float(expected_p))
+        K = st.number_input(f"K (Potassium) [Expected: {expected_k}]", value=float(expected_k))
+        rainfall = st.number_input(f"Rainfall [Expected: {expected_rainfall}]", value=float(expected_rainfall))
+        humidity = st.number_input(f"Humidity [Expected: {expected_humidity}]", value=float(expected_humidity))
+        temperature = st.number_input(f"Temperature [Expected: {expected_temperature}]", value=float(expected_temperature))
+    else:
+        N = st.number_input("N (Nitrogen)", value=50.0)
+        P = st.number_input("P (Phosphorus)", value=30.0)
+        K = st.number_input("K (Potassium)", value=20.0)
+        rainfall = st.number_input("Rainfall", value=100.0)
+        humidity = st.number_input("Humidity", value=75.0)
+        temperature = st.number_input("Temperature", value=25.0)
+
+# Advanced settings in expander
+with st.expander("Advanced Settings"):
+    proximity_threshold = st.slider("Proximity Threshold", 0.05, 0.50, 0.15, 0.01)
+    min_score_threshold = st.slider("Minimum Score Threshold", 1.0, 6.0, 3.0, 0.1)
+
+# Prediction button
+predict_button = st.button("Predict Crop")
+
+# Display results
+if predict_button:
+    try:
+        # Store input values for parameter matching
         input_features = np.array([[N, P, K, rainfall, humidity, temperature]])
         
-        # Model-based prediction
+        # 1. Model-based prediction
         input_features_scaled = scaler.transform(input_features)
         input_features_poly = poly.transform(input_features_scaled)
         input_features_selected = selector.transform(input_features_poly)
 
-        # Get prediction
+        # Predict using the trained model
         prediction_encoded = rf_model.predict(input_features_selected)[0]
         predicted_crop = label_encoder.inverse_transform([prediction_encoded])[0]
         
@@ -270,40 +290,53 @@ if expected_values:
         prediction_probs = rf_model.predict_proba(input_features_selected)[0]
         max_prob = max(prediction_probs)
         
-        # Parameter matching
+        # 2. Parameter matching with proximity consideration
         match_scores = calculate_parameter_match_scores(
             input_features, 
             crop_parameter_stats, 
-            proximity_threshold=0.15
+            proximity_threshold
         )
         best_matches = get_best_matching_crops(
             match_scores, 
             top_n=3, 
-            min_score_threshold=3.0
+            min_score_threshold=min_score_threshold
         )
         
-        # Determine final recommendation
-        final_crop = predicted_crop
+        # Display prediction results
+        st.subheader("Prediction Results")
         
-        if best_matches:
+        # Final recommendation: combine both approaches
+        if best_matches and predicted_crop == best_matches[0][0]:
+            # Model and parameter matching agree
+            st.success(f"Recommended Crop: {predicted_crop}")
+        elif best_matches and predicted_crop != best_matches[0][0]:
             top_match_crop = best_matches[0][0]
             top_match_score = best_matches[0][1]["total_score"]
             
-            # If model confidence is low but parameter matching is strong
-            if max_prob < 0.6 and top_match_score >= 4.5:
-                final_crop = top_match_crop
-                
-            # If model and parameter matching disagree but are close in confidence
-            elif predicted_crop != top_match_crop:
-                top_match_index = list(label_encoder.classes_).index(top_match_crop)
-                top_match_model_prob = prediction_probs[top_match_index]
-                
-                if top_match_model_prob >= max_prob * 0.8 and top_match_score >= 4.0:
-                    final_crop = top_match_crop
-                elif max_prob < 0.7 and top_match_score > 3.5:
-                    final_crop = top_match_crop
-        
-        # Display only the recommended crop
-        st.success(f"# Recommended Crop: {final_crop}")
-else:
-    st.warning("Please select valid district, season, and region to proceed.")
+            if max_prob > 0.7:  # High confidence in the model
+                st.success(f"Recommended Crop: {predicted_crop}")
+            elif top_match_score >= 4.5:  # Strong parameter matching
+                st.success(f"Recommended Crop: {top_match_crop}")
+            else:
+                st.success(f"Recommended Crops: {predicted_crop} or {top_match_crop}")
+        else:
+            # No strong parameter matches, rely on model
+            st.success(f"Recommended Crop: {predicted_crop}")
+            
+        # Detailed results in expander
+        with st.expander("See detailed prediction analysis"):
+            st.write("### Model Prediction")
+            st.write(f"Model predicted crop: {predicted_crop} with confidence: {max_prob:.2f}")
+            
+            st.write("### Top Parameter Matches")
+            if best_matches:
+                for crop, scores in best_matches:
+                    st.write(f"**{crop}** - Total Score: {scores['total_score']:.2f}, Avg Score: {scores['avg_score']:.2f}")
+                    param_names = ["N", "P", "K", "rainfall", "humidity", "temperature"]
+                    for i, param in enumerate(param_names):
+                        st.write(f"- {param}: Match Score {scores['param_scores'][i]:.2f}")
+            else:
+                st.write("No strong parameter matches found.")
+            
+    except Exception as e:
+        st.error(f"An error occurred during prediction: {e}")
