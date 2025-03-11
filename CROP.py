@@ -14,7 +14,7 @@ st.title("Crop Recommendation System")
 # Load datasets
 @st.cache_data
 def load_data():
-    df = pd.read_excel('Crop_recommendation.xlsx', engine='openpyxl')  
+    df = pd.read_excel('Crop_recommendatio.xlsx', engine='openpyxl')  
     Kerala = pd.read_excel('Kerala_data.xlsx', engine='openpyxl')
     Himachal_Pradesh = pd.read_excel('HP_data.xlsx', engine='openpyxl')
     Uttarakhand = pd.read_excel('Uttarakhand_data.xlsx', engine='openpyxl')
