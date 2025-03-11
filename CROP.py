@@ -1,3 +1,4 @@
+import streamlit as st
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -5,48 +6,65 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder, StandardScaler, PolynomialFeatures
 from imblearn.over_sampling import SMOTE
 from sklearn.feature_selection import SelectKBest, f_classif
+import pickle
+import os
 
-df = pd.read_excel('Crop_recommendation.xlsx', engine='openpyxl')  
-Kerala = pd.read_excel('Kerala_data.xlsx', engine='openpyxl')
-Himachal_Pradesh = pd.read_excel('HP_data.xlsx', engine='openpyxl')
-Uttarakhand = pd.read_excel('Uttarakhand_data.xlsx', engine='openpyxl')
-# Select features and target
-X = df[["N", "P", "K", "rainfall", "humidity", "temperature"]]
-y = df["label"]
+st.set_page_config(page_title="Crop Recommendation System", layout="wide")
 
-# Encode target labels
-label_encoder = LabelEncoder()
-y_encoded = label_encoder.fit_transform(y)
+st.title("Crop Recommendation System")
+st.write("This application helps farmers decide which crop to plant based on soil nutrients and environmental factors.")
 
-# Apply feature scaling to balance all parameters
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
+# Data loading and model preparation
+@st.cache_resource
+def load_data_and_prepare_model():
+    # Load datasets
+    df = pd.read_excel('Crop_recommendation.xlsx', engine='openpyxl')  
+    Kerala = pd.read_excel('Kerala_data.xlsx', engine='openpyxl')
+    Himachal_Pradesh = pd.read_excel('HP_data.xlsx', engine='openpyxl')
+    Uttarakhand = pd.read_excel('Uttarakhand_data.xlsx', engine='openpyxl')
+    
+    # Select features and target
+    X = df[["N", "P", "K", "rainfall", "humidity", "temperature"]]
+    y = df["label"]
 
-# Apply polynomial transformation for non-linearity
-poly = PolynomialFeatures(degree=2, include_bias=False)
-X_poly = poly.fit_transform(X_scaled)
+    # Encode target labels
+    label_encoder = LabelEncoder()
+    y_encoded = label_encoder.fit_transform(y)
 
-# Feature Selection: Pick best 10 features based on correlation with output
-selector = SelectKBest(score_func=f_classif, k=10)
-X_selected = selector.fit_transform(X_poly, y_encoded)
+    # Apply feature scaling to balance all parameters
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
 
-# Handle class imbalance using SMOTE (Synthetic Minority Oversampling)
-smote = SMOTE(random_state=42)
-X_balanced, y_balanced = smote.fit_resample(X_selected, y_encoded)
+    # Apply polynomial transformation for non-linearity
+    poly = PolynomialFeatures(degree=2, include_bias=False)
+    X_poly = poly.fit_transform(X_scaled)
 
-# Train-test split
-X_train, X_test, y_train, y_test = train_test_split(X_balanced, y_balanced, test_size=0.2, random_state=42)
+    # Feature Selection: Pick best 10 features based on correlation with output
+    selector = SelectKBest(score_func=f_classif, k=10)
+    X_selected = selector.fit_transform(X_poly, y_encoded)
 
-# Train the Random Forest model with optimized hyperparameters
-rf_model = RandomForestClassifier(
-    n_estimators=200,
-    max_depth=20,
-    min_samples_split=2,
-    min_samples_leaf=1,
-    class_weight="balanced",
-    random_state=42
-)
-rf_model.fit(X_train, y_train)
+    # Handle class imbalance using SMOTE (Synthetic Minority Oversampling)
+    smote = SMOTE(random_state=42)
+    X_balanced, y_balanced = smote.fit_resample(X_selected, y_encoded)
+
+    # Train-test split
+    X_train, X_test, y_train, y_test = train_test_split(X_balanced, y_balanced, test_size=0.2, random_state=42)
+
+    # Train the Random Forest model with optimized hyperparameters
+    rf_model = RandomForestClassifier(
+        n_estimators=200,
+        max_depth=20,
+        min_samples_split=2,
+        min_samples_leaf=1,
+        class_weight="balanced",
+        random_state=42
+    )
+    rf_model.fit(X_train, y_train)
+    
+    # Function to get optimal parameter ranges and means for each crop
+    crop_parameter_stats = get_crop_parameter_stats(df)
+    
+    return df, Kerala, Himachal_Pradesh, Uttarakhand, rf_model, label_encoder, scaler, poly, selector, crop_parameter_stats
 
 # Function to get optimal parameter ranges and means for each crop
 def get_crop_parameter_stats(df):
@@ -92,9 +110,6 @@ def get_crop_parameter_stats(df):
             }
         }
     return crop_params
-
-# Calculate the crop parameter statistics
-crop_parameter_stats = get_crop_parameter_stats(df)
 
 # Function to check if a parameter is within the optimal range or close to it
 def get_parameter_match_score(param_name, param_value, crop, crop_params, proximity_threshold=0.15):
@@ -149,7 +164,7 @@ def calculate_parameter_match_scores(input_values, crop_params, proximity_thresh
         match_scores[crop] = {
             "total_score": sum(param_scores),
             "avg_score": sum(param_scores) / len(param_scores),
-            "param_scores": param_scores
+            "param_scores": {param_names[i]: param_scores[i] for i in range(len(param_names))}
         }
     
     return match_scores
@@ -167,24 +182,27 @@ def get_best_matching_crops(match_scores, top_n=3, min_score_threshold=3.0):
     return sorted_crops[:top_n]
 
 # Function to fetch expected values for a given state and season from selected dataset
-def get_expected_values(state, season, dataset):
+def get_expected_values(state, season, dataset, datasets):
     # Choose the correct dataset based on user input
     if dataset == "Kerala":
-        selected_dataset = Kerala
+        selected_dataset = datasets[1]  # Kerala
     elif dataset == "Himachal Pradesh":
-        selected_dataset = Himachal_Pradesh
+        selected_dataset = datasets[2]  # Himachal_Pradesh
     elif dataset == "Uttarakhand":
-        selected_dataset = Uttarakhand
+        selected_dataset = datasets[3]  # Uttarakhand
     else:
-        raise ValueError(f"Dataset '{dataset}' is not valid. Choose from Kerala, Himachal Pradesh, or Uttarakhand.")
+        st.error(f"Dataset '{dataset}' is not valid. Choose from Kerala, Himachal Pradesh, or Uttarakhand.")
+        return None
     
     state_data = selected_dataset[selected_dataset["state"].str.lower() == state.lower()]
     if state_data.empty:
-        raise ValueError(f"State '{state}' not found in the dataset.")
+        st.error(f"District '{state}' not found in the {dataset} dataset.")
+        return None
 
     season_map = {"zaid": "zaid", "rabi": "rabi", "kharif": "kharif"}
     if season.lower() not in season_map:
-        raise ValueError(f"Season '{season}' is not valid. Choose from zaid, rabi, or kharif.")
+        st.error(f"Season '{season}' is not valid. Choose from zaid, rabi, or kharif.")
+        return None
 
     season_suffix = season_map[season.lower()]
 
@@ -197,30 +215,67 @@ def get_expected_values(state, season, dataset):
 
     return expected_n, expected_p, expected_k, expected_temperature, expected_humidity, expected_rainfall
 
-# Enhanced prediction function that always recommends a single crop
-def predict_crop(proximity_threshold=0.15, min_score_threshold=3.0):
-    try:
-        # Ask the user which dataset they want to use
-        dataset_choice = input("Enter dataset to use (Kerala/Himachal Pradesh/Uttarakhand): ").strip()
-        if dataset_choice not in ["Kerala", "Himachal Pradesh", "Uttarakhand"]:
-            raise ValueError(f"Dataset '{dataset_choice}' is not valid. Choose from Kerala, Himachal Pradesh, or Uttarakhand.")
-            
-        state = input("Enter district name: ").strip()
-        season = input("Enter season (zaid/rabi/kharif): ").strip()
+# Load data and prepare model
+try:
+    datasets = load_data_and_prepare_model()
+    df, Kerala, Himachal_Pradesh, Uttarakhand, rf_model, label_encoder, scaler, poly, selector, crop_parameter_stats = datasets
+    st.success("Data and model loaded successfully!")
+except Exception as e:
+    st.error(f"Error loading data: {e}")
+    st.stop()
 
-        # Fetch expected values from the selected dataset
-        expected_n, expected_p, expected_k, expected_temperature, expected_humidity, expected_rainfall = get_expected_values(state, season, dataset_choice)
+# Create sidebar for inputs
+st.sidebar.header("Input Parameters")
 
-        print(f"\nEnter values for prediction:")
+# Dataset selection
+dataset_choice = st.sidebar.selectbox(
+    "Select Region",
+    ["Kerala", "Himachal Pradesh", "Uttarakhand"],
+    index=0
+)
 
-        # User inputs (with default expected values)
-        N = float(input(f"N (Nitrogen) [Expected: {expected_n}]: ") or expected_n)
-        P = float(input(f"P (Phosphorus) [Expected: {expected_p}]: ") or expected_p)
-        K = float(input(f"K (Potassium) [Expected: {expected_k}]: ") or expected_k)
-        rainfall = float(input(f"Rainfall [Expected: {expected_rainfall}]: ") or expected_rainfall)
-        humidity = float(input(f"Humidity [Expected: {expected_humidity}]: ") or expected_humidity)
-        temperature = float(input(f"Temperature [Expected: {expected_temperature}]: ") or expected_temperature)
+# Get unique districts from the selected dataset
+if dataset_choice == "Kerala":
+    districts = Kerala["state"].unique().tolist()
+elif dataset_choice == "Himachal Pradesh":
+    districts = Himachal_Pradesh["state"].unique().tolist()
+else:  # Uttarakhand
+    districts = Uttarakhand["state"].unique().tolist()
 
+# District selection
+district = st.sidebar.selectbox("Select District", districts)
+
+# Season selection
+season = st.sidebar.selectbox("Select Season", ["kharif", "rabi", "zaid"])
+
+# Get expected values based on selections
+expected_values = get_expected_values(district, season, dataset_choice, datasets)
+
+if expected_values:
+    expected_n, expected_p, expected_k, expected_temperature, expected_humidity, expected_rainfall = expected_values
+    
+    # Create two columns for inputs
+    col1, col2 = st.sidebar.columns(2)
+    
+    # First column: Soil nutrients
+    with col1:
+        st.subheader("Soil Nutrients")
+        N = st.number_input(f"Nitrogen (N)", min_value=0.0, max_value=500.0, value=float(expected_n), step=1.0)
+        P = st.number_input(f"Phosphorus (P)", min_value=0.0, max_value=500.0, value=float(expected_p), step=1.0)
+        K = st.number_input(f"Potassium (K)", min_value=0.0, max_value=500.0, value=float(expected_k), step=1.0)
+    
+    # Second column: Environmental factors
+    with col2:
+        st.subheader("Environmental Factors")
+        temperature = st.number_input(f"Temperature (°C)", min_value=0.0, max_value=50.0, value=float(expected_temperature), step=0.1)
+        humidity = st.number_input(f"Humidity (%)", min_value=0.0, max_value=100.0, value=float(expected_humidity), step=0.1)
+        rainfall = st.number_input(f"Rainfall (mm)", min_value=0.0, max_value=5000.0, value=float(expected_rainfall), step=1.0)
+
+    # Prediction button
+    predict_button = st.sidebar.button("Predict Recommended Crop", type="primary")
+    
+    # Set up the main content area
+    if predict_button:
         # Store input values for parameter matching
         input_features = np.array([[N, P, K, rainfall, humidity, temperature]])
         
@@ -241,12 +296,12 @@ def predict_crop(proximity_threshold=0.15, min_score_threshold=3.0):
         match_scores = calculate_parameter_match_scores(
             input_features, 
             crop_parameter_stats, 
-            proximity_threshold
+            proximity_threshold=0.15
         )
         best_matches = get_best_matching_crops(
             match_scores, 
             top_n=3, 
-            min_score_threshold=min_score_threshold
+            min_score_threshold=3.0
         )
         
         # Final recommendation: enhanced decision logic for a single crop
@@ -274,17 +329,114 @@ def predict_crop(proximity_threshold=0.15, min_score_threshold=3.0):
                 elif max_prob < 0.7 and top_match_score > 3.5:
                     final_crop = top_match_crop
         
-        print(f"\nRecommended Crop: {final_crop}")
+        # Display the results
+        st.header("Crop Recommendation Results")
         
-        # Optional: Show confidence information
-        #print(f"Model Confidence: {max_prob:.2f}")
-        #if best_matches:
-         #   print(f"Parameter Match Score: {best_matches[0][1]['total_score']:.2f}")
+        # Create columns for recommendation and details
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            st.markdown(f"## 🌱 Recommended Crop: **{final_crop}**")
+            
+            st.markdown("### Why this crop?")
+            
+            # Display model confidence
+            st.write(f"**Model Confidence:** {max_prob:.2f}")
+            
+            # Display parameter match score if available
+            if best_matches:
+                st.write(f"**Parameter Match Score:** {best_matches[0][1]['total_score']:.2f}")
+                
+                # Show whether final recommendation came from model or parameter matching
+                if final_crop == predicted_crop:
+                    st.info("The machine learning model has high confidence in this recommendation.")
+                else:
+                    st.info("This recommendation is based on optimal growing conditions for the crop.")
+        
+        with col2:
+            # Display the input values and their match to the recommended crop
+            st.markdown("### Input Values Analysis")
+            
+            # Get match scores for the recommended crop
+            recommended_crop_scores = match_scores[final_crop]["param_scores"]
+            
+            # Create a DataFrame to display the inputs and their match scores
+            param_names = ["Nitrogen (N)", "Phosphorus (P)", "Potassium (K)", 
+                           "Rainfall (mm)", "Humidity (%)", "Temperature (°C)"]
+            param_keys = ["N", "P", "K", "rainfall", "humidity", "temperature"]
+            param_values = [N, P, K, rainfall, humidity, temperature]
+            
+            match_data = {
+                "Parameter": param_names,
+                "Your Value": param_values,
+                "Optimal Range": [f"{crop_parameter_stats[final_crop][k]['min']:.1f} - {crop_parameter_stats[final_crop][k]['max']:.1f}" 
+                                  for k in param_keys],
+                "Match Score": [recommended_crop_scores[k] for k in param_keys]
+            }
+            
+            match_df = pd.DataFrame(match_data)
+            
+            # Function to color code based on match score
+            def color_match_score(val):
+                if val >= 0.8:
+                    return 'background-color: #c6efce; color: #006100'  # Green
+                elif val >= 0.4:
+                    return 'background-color: #ffeb9c; color: #9c5700'  # Yellow
+                else:
+                    return 'background-color: #ffc7ce; color: #9c0006'  # Red
+            
+            # Apply styling
+            styled_df = match_df.style.applymap(color_match_score, subset=['Match Score'])
+            
+            # Display the styled DataFrame
+            st.dataframe(styled_df, hide_index=True)
+        
+        # Display alternative crop suggestions
+        st.markdown("### Alternative Crop Suggestions")
+        
+        # Get top 3 crops (excluding the recommended one)
+        alt_crops = []
+        for crop, scores in sorted(match_scores.items(), key=lambda x: x[1]["total_score"], reverse=True):
+            if crop != final_crop and scores["total_score"] >= 3.0:
+                alt_crops.append((crop, scores["total_score"]))
+                if len(alt_crops) >= 3:
+                    break
+        
+        if alt_crops:
+            alt_col1, alt_col2, alt_col3 = st.columns(3)
+            
+            for i, (crop, score) in enumerate(alt_crops):
+                col = [alt_col1, alt_col2, alt_col3][i]
+                with col:
+                    st.markdown(f"#### {crop}")
+                    st.write(f"Match Score: {score:.2f}")
+                    
+                    # Get what parameters are good for this crop
+                    crop_param_scores = match_scores[crop]["param_scores"]
+                    good_params = [param_names[i] for i, k in enumerate(param_keys) if crop_param_scores[k] >= 0.7]
+                    
+                    if good_params:
+                        st.write("Good match for:")
+                        st.write(", ".join(good_params))
+        else:
+            st.write("No strong alternative matches found.")
+else:
+    st.warning("Please select valid district, season, and dataset to proceed.")
 
-    except ValueError as e:
-        print(f"Error: {e}")
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+# Add information about the app
+st.sidebar.markdown("---")
+st.sidebar.info("""
+This application uses machine learning and soil science to recommend crops 
+based on soil nutrients and environmental factors specific to your region. 
+The model combines a Random Forest classifier with parameter matching to provide 
+the best recommendation.
+""")
 
-# Run the enhanced prediction function
-predict_crop(proximity_threshold=0.15, min_score_threshold=3.0)
+st.markdown("---")
+st.markdown("""
+### How to use this app:
+1. Select your region, district, and season from the sidebar
+2. Adjust soil and environmental parameters if needed (default values are pre-filled based on historical data)
+3. Click "Predict Recommended Crop" to see results
+4. Review the recommendation and alternative suggestions
+""")
