@@ -1,7 +1,3 @@
-df = pd.read_csv("Crop_recommendation.csv")
-Kerala = pd.read_excel("Kerala_data.xlsx")
-Himachal_Pradesh = pd.read_excel("HP_data.xlsx")
-Uttarakhand = pd.read_excel("Uttarakhand_data.xlsx")
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -9,6 +5,11 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder, StandardScaler, PolynomialFeatures
 from imblearn.over_sampling import SMOTE
 from sklearn.feature_selection import SelectKBest, f_classif
+
+df = pd.read_excel('Crop_recommendation.xlsx', engine='openpyxl')  
+Kerala = pd.read_excel('Kerala_data.xlsx', engine='openpyxl')
+Himachal_Pradesh = pd.read_excel('HP_data.xlsx', engine='openpyxl')
+Uttarakhand = pd.read_excel('Uttarakhand_data.xlsx', engine='openpyxl')
 # Select features and target
 X = df[["N", "P", "K", "rainfall", "humidity", "temperature"]]
 y = df["label"]
